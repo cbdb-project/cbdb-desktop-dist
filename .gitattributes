@@ -1,0 +1,17 @@
+# Store and check out text as LF everywhere, on every platform.
+#
+# This repository is unusually sensitive to line endings. The build tool
+# normalises the upstream sources to LF before patching, because the patch
+# anchors are LF literals and gofmt counts every CRLF line as a difference --
+# which would make the formatting-regression check tolerate anything. The
+# generated Go file and the macOS launcher script are written LF on purpose
+# too. Letting core.autocrlf rewrite any of that on checkout would be a slow,
+# confusing failure on someone else's machine.
+* text=auto eol=lf
+
+# Binary: never touched, never diffed as text.
+*.png binary
+*.ico binary
+*.7z  binary
+*.zip binary
+*.db  binary

@@ -1,0 +1,109 @@
+# Everything ignored here is either an INPUT dropped in by hand or an OUTPUT
+# the tools regenerate. AGENTS.md explains each one under "Repository layout".
+
+# ---------------------------------------------------------------------------
+# Input: the upstream release archive. Hundreds of megabytes, versioned by
+# whoever cut it, and not ours to redistribute. Drop the current one in the
+# repository root; build-dist.py finds it by extension.
+#
+# Anchored to the root on purpose: an unanchored *.zip would also swallow a
+# test fixture or sample archive committed deeper in the tree.
+# ---------------------------------------------------------------------------
+/*.7z
+/*.rar
+/*.zip
+/*.tar.gz
+/*.tgz
+
+# ---------------------------------------------------------------------------
+# Outputs, all reproducible from the archive by `python crossbuild/build-dist.py`
+#   extracted/  the unpacked archive, ~1.3 GB, dominated by Data/cbdb.db
+#   dist/       one assembled folder per target, each with its own copy of the
+#               1.3 GB database
+#   packages/   the shippable archives, ~390 MB each
+# ---------------------------------------------------------------------------
+/extracted/
+/dist/
+/packages/
+# The build assembles beside the real directory and swaps in on success.
+# An interrupted run leaves these behind, full of upstream payload.
+/extracted.incoming/
+/extracted.old/
+
+
+# Parked upstream tooling that build-dist.py does not ship and does not build:
+# the database-build binaries and the schema/codegen scripts. All of it comes
+# out of the upstream archive, so committing it would duplicate the input.
+/maintainer-tools/
+
+# ---------------------------------------------------------------------------
+# Local settings
+# ---------------------------------------------------------------------------
+# Machine-specific paths, and a pointer to an archive that is not ours to
+# redistribute. .env.sample is the committed template.
+# .env* rather than .env: a .env.ci or .env.bak holds the same machine
+# paths and would otherwise be committable.
+.env*
+!.env.sample
+
+# ---------------------------------------------------------------------------
+# Data, belt and braces
+# ---------------------------------------------------------------------------
+# The directories above already cover every one of these in practice. They are
+# repeated as bare patterns so that a database, a WAL sidecar or a release
+# archive left ANYWHERE in the tree -- a stray copy, a hand-made test folder,
+# an experiment under crossbuild/ -- cannot be committed by accident. A single
+# cbdb.db is 1.3 GB and GitHub refuses pushes over 100 MB per file, so one
+# mistake here costs a rewritten history rather than a revert.
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+cbdb.db*
+# Uncompressed tarballs are not covered by the .tar.gz pattern above.
+*.tar
+
+# Compiled output. A stray cbdb.exe copied beside the tracked files is tens
+# of megabytes; the shim and the Go objects are the same class of litter.
+# Nothing in this repository is a committed binary except the icon and the
+# logo. The extensionless names are the macOS binaries, which carry no
+# suffix -- a glob cannot catch those, so they are listed.
+*.exe
+*.o
+*.a
+/cbdb
+/crossbuild/ccwrap/ccwrap
+
+# ---------------------------------------------------------------------------
+# Scratch
+# ---------------------------------------------------------------------------
+# build-dist.py puts its staging tree, cc shims and zig cache outside the
+# repository, at C:\cbdb-dist-build -- Go splits $CC on whitespace, so the shim
+# must not live under a path containing any. This pattern only matters if
+# someone points --work at the repository.
+/cbdb-dist-build/
+__pycache__/
+*.py[cod]
+
+# Built by `go build` in ccwrap/ by hand. The real build compiles the shim into
+# the scratch directory instead, so a binary here is always a stray.
+/crossbuild/ccwrap/ccwrap.exe
+
+# Generated from the logo by make-favicon.py. favicon.ico IS committed, because
+# build-dist.py needs it and regenerating it would otherwise make Pillow and
+# numpy a hard requirement for a plain build. These two are only ever looked at
+# by a human tuning the artwork.
+/crossbuild/assets/favicon-preview.png
+/crossbuild/assets/logo-crimson.png
+
+# ---------------------------------------------------------------------------
+# OS and editor noise
+# ---------------------------------------------------------------------------
+Thumbs.db
+desktop.ini
+.DS_Store
+._*
+.vscode/
+.idea/
+*.swp

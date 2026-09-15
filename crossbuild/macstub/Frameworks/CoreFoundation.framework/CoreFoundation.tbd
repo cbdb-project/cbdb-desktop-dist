@@ -1,0 +1,15 @@
+--- !tapi-tbd
+tbd-version: 4
+targets: [ arm64-macos, x86_64-macos ]
+uuids:
+  - target: arm64-macos
+    value: 00000000-0000-0000-0000-0000000000A1
+  - target: x86_64-macos
+    value: 00000000-0000-0000-0000-0000000000A2
+install-name: '/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation'
+current-version: 1.0.0
+compatibility-version: 1.0.0
+exports:
+  - targets: [ arm64-macos, x86_64-macos ]
+    symbols: [ _CFArrayAppendValue, _CFArrayCreateMutable, _CFArrayGetCount, _CFArrayGetValueAtIndex, _CFDataCreate, _CFDataGetBytePtr, _CFDataGetLength, _CFDateCreate, _CFEqual, _CFErrorCopyDescription, _CFErrorGetCode, _CFNumberGetValue, _CFRelease, _CFRetain, _CFStringCreateExternalRepresentation, _CFStringCreateWithBytes, _CFStringGetLength, _CFArrayGetTypeID, _CFDataGetTypeID, _CFStringGetTypeID, _CFGetTypeID, _kCFAllocatorDefault, _kCFAllocatorNull, _kCFBooleanTrue, _kCFBooleanFalse ]
+...

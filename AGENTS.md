@@ -1,0 +1,323 @@
+# CBDB-Desktop distribution builder
+
+Turns one upstream CBDB-Desktop release archive into three shippable
+distributions — macOS Apple Silicon, macOS Intel, Windows x64 — **from a
+Windows machine**, without touching the upstream source tree.
+
+```
+python -m pip install -r requirements.txt     # once
+python crossbuild/build-dist.py               # all three targets
+python crossbuild/build-dist.py --audit-only   # just report upstream defects
+```
+
+Input is a single `.7z` (or `.zip`), named by `CBDB_ARCHIVE` in `.env` — which
+can point anywhere, so a 200 MB input need not be copied into the repository —
+or else the one archive sitting in this directory. Nothing in the repository
+names a version, a folder or a path: the payload root is found by looking for
+the directory that holds both `Code/` and `Data/`. A new upstream drop means
+pointing at a new archive and re-running.
+
+Settings live in `.env` (gitignored; `.env.sample` is the template). Resolution
+order throughout: **command line > a non-empty `CBDB_*` environment variable >
+`.env` > default**.
+
+---
+
+## Repository layout
+
+Committed:
+
+| Path | What it is |
+| --- | --- |
+| `crossbuild/build-dist.py` | the whole pipeline: extract, audit, patch a copy, cross-compile, assemble, pack, verify |
+| `crossbuild/pack-dist.py` | writes `.tar.gz`/`.zip` with explicit Unix permissions; also usable standalone |
+| `crossbuild/make-favicon.py` | recolours the logo to Harvard Crimson and emits the multi-resolution favicon |
+| `crossbuild/ccwrap/` | source of the CC shim that fronts `zig cc` |
+| `crossbuild/macstub/` | hand-written `.tbd` stubs so the darwin link works with no Apple SDK |
+| `crossbuild/assets/favicon.ico` | the *fallback* icon, committed so a plain build needs no imaging libraries |
+| `LOGO.png` | the CBDB badge, master for the fallback favicon |
+| `README.md` | what this is, in English and Chinese |
+| `.env.sample` | the settings template; copy to `.env` |
+| `requirements.txt` | py7zr, Pillow, numpy |
+| `AGENTS.md` | this file: the traps, and why the code looks the way it does |
+| `.gitignore`, `.gitattributes` | what is excluded and why; LF everywhere |
+| `crossbuild/README.txt` | a short pointer for anyone who opens that folder first |
+| `.claude/skills/` | two skills — `cbdb-dist` (cut a release) and `cbdb-diagnose` (read a user's error report). These are published too. |
+
+### Where the app icon comes from
+
+By default it is taken from the **upstream payload**, not from this repository:
+`CBDB_USE_INPUT_ICON=true` (the default) makes `resolve_icon()` pick an `.ico`
+from the payload root, and `CBDB_INPUT_ICON` names which one when there are
+several. That artwork is what the CBDB project actually maintains, so it stays
+current without anyone editing this repository.
+
+If the payload ships no `.ico` the build **stops** rather than quietly falling
+back — shipping the wrong branding silently is worse than a failed build. Set
+`CBDB_USE_INPUT_ICON=false` to use `crossbuild/assets/favicon.ico`, which
+`make-favicon.py` generates from `LOGO.png`.
+
+One consequence worth knowing: the upstream icons are multi-resolution and
+around 360 KB, where the generated fallback is 62 KB. The favicon is fetched on
+every page load, and the Windows folder carries a second copy as
+`CBDB-Desktop.ico` for shortcuts.
+
+### Ignored, and why
+
+Almost everything in `.gitignore` is either an **input** dropped in by hand or
+an **output** the tools regenerate; the tail of the file is an ordinary
+OS-and-editor noise block (`Thumbs.db`, `desktop.ini`, `.DS_Store`, `._*`,
+`.vscode/`, `.idea/`, `*.swp`) which needs no explanation.
+
+| Path | Size | Why it is ignored |
+| --- | --- | --- |
+| `/*.7z` `/*.zip` `/*.rar` `/*.tar.gz` `/*.tgz` | ~200 MB | The upstream release archive: the **input**. Versioned by whoever cut it, changes on every upstream drop, and not ours to redistribute. Anchored to the root so a test fixture committed deeper in the tree is not swallowed. Only `.7z` and `.zip` are actually *readable* by the tool; the other three are ignored so a differently-packed drop is not committed by accident. |
+| `extracted/` | ~1.3 GB | The unpacked archive, dominated by `Data/cbdb.db`. Pure function of the input; `build-dist.py` recreates it and keeps a content stamp so it is not re-extracted needlessly. |
+| `dist/` | ~3.8 GB | One assembled folder per target, each with its own full copy of the 1.3 GB database. Rebuilt from `extracted/` on every run. |
+| `packages/` | ~1.2 GB | The shippable archives. Reproducible from the input; `packages/.built-from` records which archive and toolchain produced them. |
+| `maintainer-tools/` | ~35 MB | `CBDBsetup` binaries and the schema/codegen scripts. All of it comes out of the upstream archive, so committing it would duplicate the input. Not part of any distribution — see "CBDBsetup" below. |
+| `crossbuild/assets/logo-crimson.png`, `favicon-preview.png` | small | Generated by `make-favicon.py` for a human to look at. `favicon.ico` **is** committed, so an ordinary build does not need Pillow or numpy. |
+| `crossbuild/ccwrap/ccwrap.exe` | ~2 MB | A stray from running `go build` by hand in that directory; the real build compiles the shims into the scratch directory. |
+| `/cbdb-dist-build/` | large | The scratch tree, only if someone points `--work` at the repository. Normally it lives outside. |
+| `__pycache__/`, `*.py[cod]` | small | Byte-code. |
+| `.env*` (not `.env.sample`) | small | Machine-specific paths, and a pointer to an archive that is not ours to redistribute. |
+| `*.db`, `*.db-wal`, `*.db-shm`, `*.sqlite*` | up to 1.3 GB | Belt and braces. The directories above already cover every database in practice; these bare patterns stop one left **anywhere** — a stray copy, a hand-made test folder — from being committed. GitHub refuses a push over 100 MB per file, so one mistake here costs a rewritten history rather than a revert. |
+
+Scratch lives **outside** the repository, at `%SystemDrive%\cbdb-dist-build`
+(i.e. `C:\cbdb-dist-build`), falling back to the temp directory only if that
+path contains whitespace — see "Paths with spaces" below for why. `.gitignore`
+still carries a `/cbdb-dist-build/` entry, for the case where someone points
+`--work` at the repository.
+
+---
+
+## What it does to the upstream source, and why
+
+Four code changes — **three anchored patches plus one added file** — applied to
+a **copy**; see "The upstream tree is read-only". The audit reports **five
+findings**, because one of them (`database-filename-case`) is a consequence
+that another patch happens to fix rather than a change of its own. These are
+the names the tool prints:
+
+| Audit finding | What it is | Why |
+| --- | --- | --- |
+| `exec-relative-asset-paths` | patch | `parseFlags()` resolves `Data/`, `Templates/`, `Static/` and the QBE schema against the **current working directory**. Windows Explorer sets that to the executable's own folder, so nobody noticed; macOS Finder sets it to the user's home directory, so a double-click dies with `Database file not found: Data/CBDB.db`. It also breaks any Windows shortcut with a different "Start in". |
+| `static-route-order` | patch | `/static/` is registered **twice** — in `main()` with the configured path, and earlier inside `SetupNavigationRoutes` hardcoded to `./Static/`. gorilla/mux matches in registration order, so the hardcoded one wins and every asset 404s unless the process was started from the program's own directory. The patch moves `main()`'s registration — plus a new `/favicon.ico` route, which that function's `/{page}` wildcard would otherwise swallow — **above** `SetupNavigationRoutes`, leaving the ones in there unreachable. The same patch stops discarding `SetupNavigationRoutes`'s error: on failure **no** route is registered, not even `/`, yet the server still starts and answers everything with a bare 404 and no log line. Unlike the database, `Templates/` gets no existence check of its own, so that is where a wrong template root surfaces. |
+| `database-not-found-hint` | patch | The "run from the CBDB-GO project root" hint is wrong once paths resolve against the executable. |
+| `explicit-mime-types` | added file | Registers MIME types via `mime.AddExtensionType`. Hardening, not a fix for anything observed: `net/http` takes `Content-Type` from the host MIME database (the registry on Windows; `/etc/mime.types` and friends on Unix), and those override Go's built-in table. |
+| `database-filename-case` | consequence | Upstream's default is `Data/CBDB.db`; the shipped file is `Data/cbdb.db`. It only works because NTFS and default APFS ignore case. Fixed by `exec-relative-asset-paths`, which writes the filename found on disk into the default rather than a literal. |
+
+### The 404 that looked like a MIME problem
+
+Worth knowing, because it cost a wrong diagnosis. The symptom on macOS was:
+
+```
+Refused to apply style from '.../static/cbdb_styles.css' because its MIME type
+('text/plain') is not a supported stylesheet MIME type
+```
+
+That is **not** a MIME configuration problem. The shadowed `./Static/` route
+could not find the file, Go answered 404, and a Go 404 body is served as
+`text/plain` — which is what the browser complained about. The stylesheet was
+never sent at all. `explicit-mime-types` was written before the real cause was
+found; it is kept because it costs nothing, but `static-route-order` is the fix.
+
+If you ever report a MIME-type error from this program, **check the status code
+first**.
+
+---
+
+## The upstream tree is read-only
+
+`extracted/` is upstream code and upstream data. Nothing writes to it:
+
+- `stage()` **copies** `Code/` to a scratch directory and patches the copy.
+  "Restore the source afterwards" is not a step that could be skipped or
+  interrupted — the original is never opened for writing.
+- The build compiles out-of-tree (`go build -o <scratch>`).
+- The last phase **proves** it: a size-and-mtime snapshot is taken right after
+  extraction and diffed at the end, inside a `finally` so it runs even when a
+  target fails — which is exactly when it matters.
+
+One side effect to watch for: a Go or cgo invocation whose `-o` goes missing
+leaves litter in whatever directory it ran in -- a zero-byte `-.o` from cgo's
+compiler probe, or **empty directories** named after the arguments (`cc`,
+`c++`, `-target`, `x86_64-windows-gnu`, `.exe`) if a shim is run by hand with
+mangled quoting. Git does not track empty directories, so they will not be
+committed, but they are confusing; delete them. Note they are directories, so
+`find -type f` will not show them.
+
+---
+
+## Traps this kit works around
+
+Every one of these cost real debugging time. They are the reason the code looks
+more defensive than a packaging script "should".
+
+### Paths with spaces break cgo, silently
+
+Go splits `$CC` on whitespace. A shim compiled to
+`C:\Users\me\Desktop\CBDB DIST\...\cc.exe` makes cgo try to exec
+`C:\Users\me\Desktop\CBDB`, and the error names a path you never typed. The
+same applies to `-ldflags -X`: a value containing a space is split by the
+linker's flag parser and corrupts the build with no obvious symptom.
+
+Hence: scratch lives outside the repository at a whitespace-free path, shim
+configuration arrives through the **environment** (`CCWRAP_ZIG`,
+`CCWRAP_TARGET`, `CCWRAP_STUB`), and only the mode — `cc` or `c++` — is baked
+in with `-X`. `%TEMP%` is not a safe default either: it embeds the Windows
+account name, so an account like "Jane Doe" makes the default itself unusable.
+
+### Cross-compiling cgo to macOS from Windows
+
+`github.com/mattn/go-sqlite3` is a cgo package, so every target needs a C
+compiler. `zig cc` serves all three. Two things it cannot do alone:
+
+1. **Missing `.tbd` stubs.** Zig ships only `libSystem.tbd`, so the darwin link
+   fails on `-lresolv` and on `-framework CoreFoundation -framework Security`.
+   `crossbuild/macstub/` holds hand-written stubs declaring 44 symbols — 25
+   CoreFoundation and 14 Security, which `crypto/x509` imports, plus 5
+   `res_9_*` for `net`'s DNS resolver — which is enough to link with no Apple
+   SDK. If the link ever fails with `undefined symbol: _CFSomething`, Go has
+   started importing a new one: add it to the relevant `.tbd`.
+   These stubs contain only symbol names and placeholder UUIDs. No Apple SDK
+   content is reproduced.
+2. **`dsymutil` and the Mach-O UUID.** Darwin builds need
+   `-ldflags "-s -w -B none"`. `-w` suppresses DWARF, because with it Go shells
+   out to Apple's `dsymutil`, which does not exist here. `-B none` suppresses
+   the Mach-O UUID, whose rewrite step hits an `Access is denied` rename bug on
+   Windows (Go opens the output file and then renames over it, which Unix
+   allows and Windows does not). `-B none` in turn makes Go pass
+   `-Wl,-no_uuid`, which zig's linker rejects — so the shim filters it out,
+   **including inside response files**, where Go writes each argument
+   Go-quoted (`"-Wl,-no_uuid"`) once the command line exceeds ~30 KB.
+
+### NTFS has no execute bit
+
+Every ordinary Windows packer — `tar.exe`, bsdtar, `Compress-Archive`, 7-Zip —
+therefore writes the macOS binary as mode 0644, and the recipient has to
+`chmod +x` it. `pack-dist.py` writes the mode into the archive explicitly, so
+`tar xzf` on a Mac produces a file that is already executable. A `.zip` can
+carry it too, in the external attributes, provided `create_system` says Unix.
+
+Related: `ZipFile(compresslevel=...)` is only consulted when `ZipFile` builds
+the `ZipInfo` itself. A hand-made `ZipInfo` — which is how the Unix mode gets
+set at all — keeps `compress_level = None` and zlib's default silently wins, so
+`-l` does nothing unless it is set on the `ZipInfo`.
+
+### macOS Gatekeeper
+
+The binaries are not signed with an Apple Developer ID and are not notarized,
+so the first launch is refused: right-click → Open, or System Settings →
+Privacy & Security → "Open Anyway". Approving once clears it for good.
+Unpacking with `tar xzf` rather than Finder never sets the download flag in the
+first place, so that route sees no refusal at all.
+
+A single Go binary is one CPU architecture, so macOS needs two folders. An
+Intel build runs on Apple Silicon under Rosetta 2, but that is slower and
+needs Rosetta installed — not a good default for a database application.
+
+### Windows console encoding
+
+Python encodes stdout with the active code page unless UTF-8 mode is on. One
+CJK filename, or a U+FFFD produced by decoding a tool's output with
+`errors="replace"`, raises `UnicodeEncodeError`. `pack_tar` prints a line per
+member, so for the two `.tar.gz` targets that can land in the middle of writing
+a 390 MB archive; `pack_zip` prints nothing per member. All output goes through
+an encode-with-replace printer for that reason.
+
+`subprocess.run(text=True)` has the mirror problem: it decodes with the locale
+codec, and the upstream sources contain em-dashes, so `gofmt`'s diff is not
+decodable that way and the reader thread dies. Everything is captured as UTF-8
+explicitly.
+
+### `gofmt` exit codes
+
+`0` = already formatted, `1` = **differences found**, `2` = could not parse.
+Only `2` is a failure. Treating `1` as one aborts every run; ignoring `2` lets
+syntactically broken generated Go through a check specifically meant to catch
+it.
+
+Also: most upstream files already fail `gofmt`, so an absolute check is noise.
+What matters is whether the patches made `main.go` **worse** — and for that
+comparison to mean anything, the baseline must be measured on the staged copy
+after line-ending normalisation. Upstream is CRLF; `gofmt` counts every CRLF
+line as a difference, which would swamp the comparison and make it tolerate
+anything.
+
+### main.go is CRLF, the patch anchors are LF
+
+`audit()` and `stage()` read with Python's default newline translation. That is
+load-bearing: it is the only reason LF-literal anchors match `main.go`, which
+is CRLF. (Most other upstream files are LF-only and one is mixed, but `main.go`
+is the only file the patches touch.) **Do not "harden" those reads to
+`newline=""`** — all the patches break at once.
+
+---
+
+## How verification works, and what it does not prove
+
+`verify()` asserts the archive reproduces **exactly** what `assemble()` wrote:
+the member set, and every file's size and SHA-256, plus that every entry's mode
+is 0644 or 0755, plus that the executable entries are exactly the expected
+full paths, plus (for `.tar.gz`) that the gzip stream runs to EOF.
+
+It is that thorough because a weaker version was demonstrated to pass an
+archive containing a **zero-byte binary, an empty `Templates/` and no
+stylesheet**, while printing `database: PRISTINE`. Checking only the database
+hash and a list of executable basenames is not verification. Two specific traps:
+
+- **`tarfile` never validates the gzip trailer.** It stops at the
+  end-of-archive blocks, so an archive truncated by as little as **one byte**
+  passed every content check. Hence the explicit read to EOF.
+- **The executable check was circular**: the same name list both assigned 0755
+  and asserted it. In the pipeline it now compares full archive-relative paths,
+  so a file named `cbdb` deeper in the payload is neither chmod'ed nor
+  accepted. (`pack-dist.py` used *standalone* has no manifest to compare
+  against and still falls back to matching basenames -- fine for the one-off
+  use it advertises, but not a verification.)
+
+What it still does not prove: only the database is tied back to **upstream**
+(via its hash). A hypothetically corrupt copy of a template would be hashed
+into the manifest and verify clean. Closing that would mean hashing the
+upstream payload as well.
+
+Nothing gets a release name until it has been verified: archives are written to
+`<name>.part` and `os.replace`d into place afterwards. Same pattern for
+`extracted/` and each `dist/` folder — build beside, swap in, restore the
+previous copy if the swap fails.
+
+---
+
+## CBDBsetup is not part of a distribution
+
+Upstream ships a second binary. It is **not** an installer or a SQLite
+configuration step — it is the maintainer's database-build tool. Its own
+`main.go` says "one-time maintenance-routine runner for CBDB_new.db", its `-db`
+default is `Data/CBDB_new.db` ("the scratch copy, **not** CBDB.db"), and its
+routes are `index-year`, `index-address`, `provision-schema`,
+`zzz-addresses-belongs`, `zzz-distance-data`, `zzz-names` — the derived-data
+rebuild you run when preparing a new data release.
+
+`CBDB_new.db` is not in any distribution, so it could not even start. The
+binaries are parked in `maintainer-tools/` (gitignored) rather than shipped.
+
+---
+
+## Reporting a fix upstream
+
+Everything here is a local patch over an archive. If any of it should go
+upstream, these are the minimal changes:
+
+- Resolve the asset defaults against `os.Executable()` rather than the working
+  directory.
+- **Delete** `cbdb_navigation_backend.go`'s `/static/` registration. `main()`
+  already registers it with the configurable path; the one in there is a
+  duplicate hardcoded to `./Static/`. This kit works around it by registering
+  first, which leaves the duplicate as unreachable dead code — so if upstream
+  ever reorders registration, it comes back.
+- Check `SetupNavigationRoutes`'s error.
+- Make the default database filename match the shipped file's case.
+
+The audit recognises each fix by its own marker, so once upstream adopts one,
+that patch is skipped rather than failing.

@@ -37,6 +37,23 @@ repository path in Git Bash form, e.g. `/c/Users/me/Desktop/CBDB DIST`. The
      skipping `*_test.go`; its gate tolerates but does not copy `.bat`, `.ps1`,
      `.md` and `.txt`. Extend it deliberately rather than widening the gate.
 
+   Then read the **`outside the payload (not shipped)`** block: whatever sits
+   at the archive root or beside `Code/`/`Data/`. None of it is packed, since
+   `assemble()` copies by allow-list. Before shipping, compare it with the
+   previous drop, and treat every entry marked **`NEW, check`** as unverified:
+
+   - grep `Code/` and `Templates/` for its name (file-open sites, `flag`
+     defaults in `main.go`, `../../static/...` links);
+   - not read by the program → add a pattern to `KNOWN_UNSHIPPED` in
+     `build-dist.py` and leave it out;
+   - read by the program → add it to `PAYLOAD_DIRS`/`PAYLOAD_FILES`.
+
+   Word documents (`*.docx`) are already classified as not shipped. They are
+   upstream's label-revision and translation notes; the label text is
+   hardcoded in `Templates/*/index.html`, which only cite them in comments.
+   See AGENTS.md, "Root-level files are not shipped unless the program reads
+   them".
+
 3. `python crossbuild/build-dist.py`
 
    About ten minutes. Each target is built, assembled, packed and verified
@@ -82,10 +99,12 @@ The program opens a browser tab ~300 ms after start and there is no flag to
 stop it. Trimming `PATH` does not help: `openBrowser` uses `rundll32`, which
 lives in `C:\Windows\System32`. Just close the tab.
 
-Kill the process afterwards, then delete `Data/cbdb.db-wal` and
-`Data/cbdb.db-shm` **from the dist folder** — SQLite writes them next to the
-database, an abrupt kill leaves them behind, and they must not end up in a
-package. (`verify()` would in fact catch them as `UNEXPECTED` members, but
+Kill the process afterwards, then delete `Data/cbdb.db-wal`,
+`Data/cbdb.db-shm`, `Data/cbdb.db.lock` and `Data/cbdb.db.url` **from the
+dist folder** — SQLite writes the first two next to the database,
+`instance_lock.go` writes the other two (the single-instance lock, and the
+running instance's address for a second launch to find), an abrupt kill
+leaves them behind, and they must not end up in a package. (`verify()` would in fact catch them as `UNEXPECTED` members, but
 delete them anyway.)
 
 ## Never

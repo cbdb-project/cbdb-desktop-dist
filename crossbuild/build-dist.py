@@ -65,6 +65,7 @@ the fixes, that patch's own marker is recognised and it is skipped.
 
 import argparse
 import contextlib
+import fnmatch
 import glob
 import hashlib
 import os
@@ -148,6 +149,14 @@ PAYLOAD_SKIP_EXT = (".ico", ".lnk", ".bat", ".py", ".sql")
 # "office.index.20260815.html". Matched by shape rather than by a hardcoded
 # year, which would start shipping them in January.
 PAYLOAD_SKIP_DATED = re.compile(r"\.\d{8}\.[A-Za-z0-9]+$")
+# Root-level entries (of the archive or of the payload) already checked and
+# known NOT to be read by the program. Only reported by the audit; nothing
+# outside the allow-list above is shipped either way. The .docx are upstream's
+# working notes (e.g. the 2026-10 label-revision documents): the label text
+# itself is hardcoded in each Templates/*/index.html, which merely cite them in
+# comments.
+KNOWN_UNSHIPPED = ["Code", "Bin", "CBDBSetUpCode", "CBDBSetUpTemplate",
+                   "cbdb.exe", "CBDBsetup.exe", "*.ico", "*.lnk", "*.txt", "*.docx"]
 
 # Where the favicon shipped in the payload comes from. By default it is taken
 # from the upstream archive, which is the thing the CBDB project actually
@@ -776,7 +785,39 @@ def audit(db_filename):
 
     _out("\n   %d finding(s); %d patch(es) and %d added file(s) to apply"
           % (findings, n_patches, n_additions))
+    report_unshipped()
     return problems, already_fixed
+
+
+def report_unshipped():
+    """List what sits at the archive root and the payload root but is not shipped.
+
+    assemble() is an allow-list, so nothing here reaches a distribution. The
+    risk runs the other way: upstream adds something at the root that the
+    program DOES read at run time, and the build quietly leaves it out. Hence
+    entries not in KNOWN_UNSHIPPED are marked NEW, for a human to check
+    against Code/ before shipping. Informational only; it never fails a run.
+    """
+    shipped = {d.lower() for d in PAYLOAD_DIRS} | {"data"}
+    rows = []
+    for base in dict.fromkeys((EXTRACT, SRC)):   # the same directory if the archive has no top folder
+        for n in sorted(os.listdir(base)):
+            path = os.path.join(base, n)
+            if n.startswith(".") or os.path.normcase(path) == os.path.normcase(SRC):
+                continue
+            if base == SRC and n.lower() in shipped:
+                continue
+            rel = os.path.relpath(path, EXTRACT).replace(os.sep, "/") + ("/" if os.path.isdir(path) else "")
+            known = any(fnmatch.fnmatch(n.lower(), k.lower()) for k in KNOWN_UNSHIPPED)
+            rows.append(("not shipped" if known else "NEW, check", rel))
+    if not rows:
+        return
+    _out("\n   outside the payload (not shipped):")
+    for tag, rel in rows:
+        _out("   %-11s  %s" % (tag, rel))
+    if any(tag != "not shipped" for tag, _ in rows):
+        _out("   -> grep Code/ and Templates/ for each NEW entry; if the program reads it,\n"
+             "      add it to PAYLOAD_DIRS/PAYLOAD_FILES, otherwise to KNOWN_UNSHIPPED.")
 
 
 def stage():

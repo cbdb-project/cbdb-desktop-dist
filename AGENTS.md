@@ -304,6 +304,44 @@ binaries are parked in `maintainer-tools/` (gitignored) rather than shipped.
 
 ---
 
+## Root-level files are not shipped unless the program reads them
+
+A distribution holds only what `assemble()` copies by allow-list:
+`Templates/`, `Static/`, `Data/qbe_schema.json`, the database, the favicon,
+the binary and a README. Anything else upstream puts at the **archive root**
+(beside `CBDB-Desktop/`) or at the **payload root** (beside `Code/` and
+`Data/`) never reaches a package.
+
+Allow-listing makes the opposite mistake the one to watch for: if upstream
+adds something at the root that the program *does* read at run time, the build
+leaves it out without any error. So on every new drop:
+
+1. Read the `outside the payload (not shipped)` block at the end of the audit.
+   Entries matching `KNOWN_UNSHIPPED` in `build-dist.py` are marked
+   `not shipped`; anything else is marked `NEW, check`.
+2. For each `NEW` entry, grep `Code/` (every file-open site: `os.Open`,
+   `os.ReadFile`, `ParseFiles`, `ServeFile`, `FileServer`, the `flag` defaults
+   in `main.go`) and `Templates/` (links such as `../../static/...`) for its
+   name.
+3. If the program does not read it, add a pattern to `KNOWN_UNSHIPPED`. If it
+   does, add it to `PAYLOAD_DIRS`/`PAYLOAD_FILES`.
+
+**Word documents** are the standing example. The 2026-10-28 drop
+(`CBDB-Desktop_Build_20261028.7z`) puts 14 `.docx` at the archive root — the
+per-form "label revisions" notes, the QBE translation notes and "label review
+-- conventions and decisions" — where 20260925 had one ("Additional Notes on
+Build…"). They are the record of the translation review, **not** a resource:
+the label text is hardcoded in each `Templates/*/index.html` (`const T = {…}`),
+whose comments only cite the documents, and `networks_form_query.go` likewise
+cites a `.docx` in comments only. No code opens a `.docx`. `*.docx` is
+therefore in `KNOWN_UNSHIPPED`, and none is packed.
+
+Note the reverse case inside `Static/`, which is copied whole:
+`Static/CBDB_UserGuide.pdf` (18 MB) **is** shipped, because the navigation
+page links it (`../../static/CBDB_UserGuide.pdf`).
+
+---
+
 ## Reporting a fix upstream
 
 Everything here is a local patch over an archive. If any of it should go

@@ -62,6 +62,54 @@ repository path in Git Bash form, e.g. `/c/Users/me/Desktop/CBDB DIST`. The
 4. Check `packages/.built-from`. Any line marked `EARLIER` is an archive left
    over from a previous upstream release — delete it before shipping a set.
 
+5. **Publish to Dropbox.** This is part of "build the packages"; do it
+   without being asked. Copy all three packages into **both** of these
+   folders, replacing the previous set (same filenames, no version suffix):
+
+   | Dropbox-relative folder |
+   | --- |
+   | `CBDB/CBDB Desktop/dist` |
+   | `cbdb_helpers/Reference_books_videos_data_most_freq/CBDB unreleased version/dist` |
+
+   The paths are relative to the Dropbox root, which differs per machine.
+   Read it from Dropbox's own `info.json` (`personal.path`) rather than
+   guessing `~/Dropbox`: on Windows that is `%LOCALAPPDATA%\Dropbox\info.json`
+   (older installs: `%APPDATA%\Dropbox\info.json`), on macOS
+   `~/.dropbox/info.json`. If neither destination folder exists under that
+   root, stop and ask rather than creating it.
+
+   Copy each file to `<name>.part` beside the old one, compare its SHA-256
+   with the source, and only then `os.replace` it into place, so a half-written
+   file never syncs out under the release name:
+
+       python -I - <<'EOF'
+       import hashlib, json, os, shutil, sys
+       info = [os.path.expandvars(p) for p in (r"%LOCALAPPDATA%\Dropbox\info.json",
+               r"%APPDATA%\Dropbox\info.json")] + [os.path.expanduser("~/.dropbox/info.json")]
+       root = json.load(open(next(p for p in info if os.path.isfile(p))))["personal"]["path"]
+       dests = ["CBDB/CBDB Desktop/dist",
+                "cbdb_helpers/Reference_books_videos_data_most_freq/CBDB unreleased version/dist"]
+       names = ["CBDB-Desktop-mac-arm64.tar.gz", "CBDB-Desktop-mac-x64.tar.gz", "CBDB-Desktop-win-x64.zip"]
+       def sha(p):
+           h = hashlib.sha256()
+           with open(p, "rb") as f:
+               for b in iter(lambda: f.read(1 << 20), b""): h.update(b)
+           return h.hexdigest()
+       bad = 0
+       for d in (os.path.join(root, *x.split("/")) for x in dests):
+           if not os.path.isdir(d): sys.exit(f"missing: {d}")
+           for n in names:
+               src, tmp = os.path.join("packages", n), os.path.join(d, n + ".part")
+               shutil.copyfile(src, tmp)
+               if sha(tmp) == sha(src): os.replace(tmp, os.path.join(d, n)); print("OK  ", d, n)
+               else: os.remove(tmp); bad += 1; print("FAIL", d, n)
+       sys.exit(bad)
+       EOF
+
+   Run it from the repository root. To look at a destination folder use
+   `cmd.exe /c "dir <folder>"` only — a recursive listing or attribute scan of
+   a Dropbox folder can hydrate unrelated online-only files.
+
 ## Only when the logo changes
 
     python crossbuild/make-favicon.py --preview

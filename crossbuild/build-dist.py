@@ -156,7 +156,8 @@ PAYLOAD_SKIP_DATED = re.compile(r"\.\d{8}\.[A-Za-z0-9]+$")
 # itself is hardcoded in each Templates/*/index.html, which merely cite them in
 # comments.
 KNOWN_UNSHIPPED = ["Code", "Bin", "CBDBSetUpCode", "CBDBSetUpTemplate",
-                   "cbdb.exe", "CBDBsetup.exe", "*.ico", "*.lnk", "*.txt", "*.docx"]
+                   "cbdb.exe", "CBDBsetup.exe", "*.ico", "*.lnk", "*.txt", "*.docx",
+                   "Revision Documentation"]
 
 # Where the favicon shipped in the payload comes from. By default it is taken
 # from the upstream archive, which is the thing the CBDB project actually
